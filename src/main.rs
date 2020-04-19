@@ -20,7 +20,7 @@ use printing::print_occurences;
 const MAX_THREADS: usize = 100;
 
 fn main() {
-    let matches = clap::App::new("Comb")
+    let matches = clap::App::new("Strainer")
         .version("0.1")
         .author("Brandon Smith <mail@brandonsmith.ninja>")
         .about("Find duplicate lines in text files")
@@ -39,7 +39,7 @@ fn main() {
             .short("d")
             .long("line_delimiter")
             .value_name("CHAR")
-            .help("The character that delimits 'lines'. Can be used, for example, to comb a natural-language file by passing '.' to split on sentences. [default: \\n]")
+            .help("The character that delimits 'lines'. Can be used, for example, to search a natural-language file by passing '.' to split on sentences. [default: \\n]")
             .takes_value(true))
         .arg(clap::Arg::with_name("line_pattern")
             .short("lp")
@@ -87,7 +87,7 @@ fn main() {
     let end_walk = SystemTime::now();
 
 
-    // comb each file in list
+    // search each file in list
     let results = Mutex::new(HashMap::new());
     let results_arc = Arc::new(&results);
 
