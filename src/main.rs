@@ -17,6 +17,8 @@ use counting::{count_lines, CountingOptions, append_records, LineRecords};
 use common::parse_pattern;
 use printing::print_occurences;
 
+const MAX_THREADS: usize = 100;
+
 fn main() {
     let matches = clap::App::new("Comb")
         .version("0.1")
@@ -73,7 +75,7 @@ fn main() {
 
 
     // walk directory recursively and find all target files
-    println!("Walking...");
+    println!("Searching...");
     let start_walk = SystemTime::now();
     let files = list_files_in_dir(
         Path::new(&directory), 
@@ -92,8 +94,7 @@ fn main() {
     let start_search = SystemTime::now();
     let files_count = files.len();
     crossbeam::scope(move |scope| {
-
-        for chunk in files_arc.clone().chunks(100) {
+        for chunk in files_arc.clone().chunks(files_count / MAX_THREADS) {
             let local_options_arc = options_arc.clone();
             let local_results_arc = results_arc.clone();
 
