@@ -10,4 +10,5 @@ edition = "2018"
 opt-level = 3
 
 [dependencies]
+clap = "2.33.0"
 crossbeam = "0.7.3"
