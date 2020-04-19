@@ -4,13 +4,18 @@ use std::{collections::HashMap, fs::File, path::{PathBuf, Path}, time::SystemTim
 extern crate clap;
 extern crate crossbeam;
 
+#[cfg(feature = "syntax-highlighting")]
+extern crate syntect;
+
 mod gather_paths;
 mod counting;
 mod common;
+mod printing;
 
 use gather_paths::list_files_in_dir;
 use counting::{count_lines, CountingOptions, append_records, LineRecords};
 use common::parse_pattern;
+use printing::print_occurences;
 
 fn main() {
     let matches = clap::App::new("Comb")
@@ -79,10 +84,6 @@ fn main() {
     let options_arc = Arc::new(options);
     let end_walk = SystemTime::now();
 
-    for path in files.iter() {
-        println!("{:?}", path);
-    }
-
 
     // comb each file in list
     let results = Mutex::new(HashMap::new());
@@ -104,7 +105,7 @@ fn main() {
                             append_records(&mut results_lock, &mut file_results);
                             std::mem::drop(results_lock);
                         },
-                        Err(e) => println!("Failed to read file {:?}: '{}'", &file_path, &e)
+                        Err(_) => ()
                     }
                 }
             });
@@ -118,11 +119,7 @@ fn main() {
     let duplicates = results_lock.iter().filter(|entry| entry.1.len() > 1);
     for dupe in duplicates {
         println!();
-        println!("{}", dupe.0);
-
-        for loc in dupe.1 {
-            println!("\t{}", &loc);
-        }
+        print_occurences(dupe.0, dupe.1);
     }
     
     println!();
@@ -136,7 +133,6 @@ fn main() {
         "Searching took {:?}ms",
         end_search.duration_since(start_search).unwrap().as_millis()
     );
-
 }
 
 
