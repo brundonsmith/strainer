@@ -94,7 +94,7 @@ fn main() {
     let start_search = SystemTime::now();
     let files_count = files.len();
     crossbeam::scope(move |scope| {
-        for chunk in files_arc.clone().chunks(files_count / MAX_THREADS) {
+        for chunk in files_arc.clone().chunks(std::cmp::max(files_count / MAX_THREADS, 1)) {
             let local_options_arc = options_arc.clone();
             let local_results_arc = results_arc.clone();
 
