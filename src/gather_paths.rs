@@ -1,23 +1,28 @@
+use std::io::{self};
+use std::{
+    fs,
+    path::{Path, PathBuf}, collections::VecDeque,
+};
 
-use std::{path::{PathBuf, Path}, fs, io};
+use crate::common::{matches,Pattern};
 
-use crate::common::matches;
+pub fn list_files_in_dir(root_dir: &Path, pattern: &Pattern) -> Result<Vec<PathBuf>, io::Error> {
+    let mut dir_queue: VecDeque<PathBuf> = VecDeque::new();
+    dir_queue.push_back(PathBuf::from(root_dir));
 
-pub fn list_files_in_dir(path: &Path, pattern: &str) -> Result<Vec<PathBuf>, io::Error> {
-  if path.is_dir() {
-      let mut all_children = vec![];
+    let mut file_paths = Vec::new();
 
-      for entry in fs::read_dir(path)? {
-          let child_path = entry?.path();
-          let mut child_contents = list_files_in_dir(&path.join(&child_path), pattern)?;
+    while !dir_queue.is_empty() {
+        let next_dir = dir_queue.pop_front().unwrap();
+        
+        for child_path in fs::read_dir(next_dir)?.filter_map(|entry| entry.ok()).map(|entry| entry.path()) {
+            if child_path.is_dir() {
+                dir_queue.push_back(PathBuf::from(child_path));
+            } else if matches(child_path.to_str().unwrap(), pattern) {
+                file_paths.push(PathBuf::from(child_path));
+            }
+        }
+    }
 
-          all_children.append(&mut child_contents);
-      }
-
-      return Ok(all_children);
-  } else if matches(path.to_str().unwrap(), pattern) {
-      return Ok(vec![ PathBuf::from(path) ]);
-  } else {
-      return Ok(vec![]);
-  }
+    return Ok(file_paths);
 }

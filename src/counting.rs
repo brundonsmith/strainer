@@ -1,44 +1,47 @@
-use std::{collections::HashMap, fmt::Display, path::PathBuf};
+use std::{collections::HashMap, fmt::Display, path::{Path, PathBuf}};
 
-use crate::common::matches;
+use crate::common::{matches, Pattern};
+
+pub type LineRecords = HashMap<String, Vec<FileLocation>>;
 
 #[derive(Debug)]
 pub struct CountingOptions<'a> {
     pub line_delimiter: char,
-    pub line_pattern: &'a str,
+    pub line_pattern: Pattern<'a>,
     pub squash_chars: Vec<char>,
     pub ignore_delimiters: Vec<char>,
     pub trim_whitespace: bool,
 }
 
 pub fn count_lines(
-    file_path: &str,
+    file_path: &Path,
     text: &str,
-    options: CountingOptions,
-) -> HashMap<String, Vec<FileLocation>> {
-    let mut records: HashMap<String, Vec<FileLocation>> = HashMap::new();
+    options: &CountingOptions,
+) -> LineRecords {
+    let mut records = HashMap::new();
 
     let mut current_line_number = 0;
     let mut current_line = String::new();
     let mut prev_char: Option<char> = None;
 
     for c in text.chars() {
-        if prev_char
+        let squashing = prev_char
             .map(|prev| prev == c && options.squash_chars.contains(&prev))
-            .unwrap_or(false)
-        {
+            .unwrap_or(false);
+
+        if squashing {
             // do nothing
         } else if c == options.line_delimiter {
-            if options.trim_whitespace {
-                current_line = String::from(current_line.trim());
-            }
-            
             let completed_line = current_line;
             current_line = String::new();
-            
-            if matches(&completed_line, &options.line_pattern) {
-                record_line(&mut records, file_path, completed_line, current_line_number);
-            }
+
+            record_line(
+                &options,
+                &mut records,
+                file_path,
+                completed_line,
+                current_line_number,
+            );
 
             current_line_number += 1;
         } else {
@@ -48,22 +51,24 @@ pub fn count_lines(
         prev_char = Some(c);
     }
 
-    if options.trim_whitespace {
-        current_line = String::from(current_line.trim());
-    }
-
-    if matches(&current_line, &options.line_pattern) {
-        record_line(&mut records, file_path, current_line, current_line_number);
-    }
+    record_line(
+        &options,
+        &mut records,
+        file_path,
+        current_line,
+        current_line_number,
+    );
 
     return records;
 }
 
 pub fn append_records(
-    target: &mut HashMap<String, Vec<FileLocation>>,
-    source: &mut HashMap<String, Vec<FileLocation>>,
+    target: &mut LineRecords,
+    source: &mut LineRecords,
 ) {
-    for key in source.keys().map(|k| k.clone()).collect::<Vec<String>>() {
+    let source_keys = source.keys().map(|k| k.clone()).collect::<Vec<String>>();
+
+    for key in source_keys {
         let mut source_val = source.remove(&key).unwrap();
 
         match target.get_mut(&key) {
@@ -76,21 +81,30 @@ pub fn append_records(
 }
 
 fn record_line(
-    records: &mut HashMap<String, Vec<FileLocation>>,
-    file_path: &str,
+    options: &CountingOptions,
+    records: &mut LineRecords,
+    file_path: &Path,
     line: String,
     line_number: u32,
 ) {
-    if line.len() > 0 {
-        let file_location = FileLocation {
-            path: PathBuf::from(file_path),
-            line_number: line_number,
-        };
+    let line = if options.trim_whitespace {
+        String::from(line.trim())
+    } else {
+        line
+    };
 
-        match records.get_mut(&line) {
-            Some(existing_locations) => existing_locations.push(file_location),
-            None => {
-                records.insert(line, vec![file_location]);
+    if matches(&line, &options.line_pattern) {
+        if line.len() > 0 {
+            let file_location = FileLocation {
+                path: PathBuf::from(file_path),
+                line_number: line_number,
+            };
+
+            match records.get_mut(&line) {
+                Some(existing_locations) => existing_locations.push(file_location),
+                None => {
+                    records.insert(line, vec![file_location]);
+                }
             }
         }
     }

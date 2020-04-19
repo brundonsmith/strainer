@@ -1,8 +1,14 @@
 
-pub fn matches(s: &str, pattern: &str) -> bool {
+pub type Pattern<'a> = Vec<&'a str>;
+
+pub fn parse_pattern(pattern_str: &str) -> Pattern {
+    pattern_str.split('*').collect()
+}
+
+pub fn matches<'a>(s: &str, pattern: &Pattern) -> bool {
     let mut remainder = Some(s);
   
-    for segment in pattern.split('*') {
+    for segment in pattern {
         match remainder {
             Some(slice) => {
                 match slice.find(segment) {
@@ -15,4 +21,4 @@ pub fn matches(s: &str, pattern: &str) -> bool {
     }
   
     return true;
-  }
+}
