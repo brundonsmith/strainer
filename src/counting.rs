@@ -11,6 +11,7 @@ pub struct CountingOptions<'a> {
     pub squash_chars: Vec<char>,
     pub ignore_delimiters: Vec<char>,
     pub trim_whitespace: bool,
+    pub same_file: bool,
 }
 
 pub fn count_lines(
@@ -62,7 +63,7 @@ pub fn count_lines(
     return records;
 }
 
-pub fn append_records(
+pub fn merge_records(
     target: &mut LineRecords,
     source: &mut LineRecords,
 ) {
