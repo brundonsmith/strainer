@@ -116,15 +116,19 @@ fn main() {
 
 
     // filter out lines with no duplication
-    let results_lock = results.lock().unwrap();
-    let duplicates = results_lock.iter().filter(|entry| entry.1.len() > 1);
+    let mut output_buffer = String::new();
+
+    let mut duplicate_count = 0;
     for dupe in duplicates {
-        println!();
-        print_occurences(dupe.0, dupe.1);
+            duplicate_count += 1;
+            output_buffer.push_str("\n\n");
+            print_occurences(dupe.0, dupe.1, |str| output_buffer.push_str(str));
     }
     
+    println!("{}", &output_buffer);
     println!();
-    println!("{} files found", files_count);
+    println!("Searched {} files", files_count);
+    println!("Found {} duplicated lines", duplicate_count);
     println!(
         "Walking took {:?}ms",
         end_walk.duration_since(start_walk).unwrap().as_millis()

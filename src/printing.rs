@@ -8,7 +8,7 @@ use std::ffi::OsStr;
 
 use crate::counting::FileLocation;
 
-pub fn print_occurences(line: &str, occurences: &Vec<FileLocation>) {
+pub fn print_occurences(line: &str, occurences: &Vec<FileLocation>, mut write: impl FnMut(&str) -> ()) {
     
     #[cfg(feature = "syntax-highlighting")]
     {
@@ -40,16 +40,17 @@ pub fn print_occurences(line: &str, occurences: &Vec<FileLocation>) {
             None => String::from(line)
         };
 
-        println!("{}", &output);
+        write("{}");
+        write(&output);
     }
 
 
     #[cfg(not(feature = "syntax-highlighting"))]
     {
-        println!("{}", line);
+        write(line);
     }
 
     for loc in occurences {
-        println!("\t{}", &loc);
+        write(&format!("\n\t{}", &loc));
     }
 }
