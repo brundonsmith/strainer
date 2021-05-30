@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, path::{Path, PathBuf}};
+use std::{collections::{HashMap, HashSet}, fmt::Display, path::{Path, PathBuf}};
 
 use crate::common::{matches, Pattern};
 
@@ -12,6 +12,7 @@ pub struct CountingOptions<'a> {
     pub ignore_delimiters: Vec<char>,
     pub trim_whitespace: bool,
     pub same_file: bool,
+    pub remove_duplicates: bool,
 }
 
 pub fn count_lines(
@@ -61,6 +62,73 @@ pub fn count_lines(
     );
 
     return records;
+}
+
+pub fn strip_lines(
+    text: &str,
+    options: &CountingOptions,
+) -> String {
+    let mut found_lines = HashSet::new();
+    let mut new_text = String::new();
+
+    let mut current_line = String::new();
+    let mut prev_char: Option<char> = None;
+
+    for c in text.chars() {
+        let squashing = prev_char
+            .map(|prev| prev == c && options.squash_chars.contains(&prev))
+            .unwrap_or(false);
+
+        if squashing {
+            new_text.push(c);
+        } else if c == options.line_delimiter {
+            let completed_line = current_line;
+            current_line = String::new();
+
+            if found_lines.contains(&completed_line) {
+                // do nothing
+            } else {
+                new_text.push_str(&completed_line);
+                new_text.push(c);
+                found_lines.insert(completed_line);
+            }
+        } else {
+            current_line.push(c);
+        }
+
+        prev_char = Some(c);
+    }
+
+    if found_lines.contains(&current_line) {
+        // do nothing
+    } else {
+        new_text.push_str(&current_line);
+        found_lines.insert(current_line);
+    }
+
+    return new_text;
+}
+
+#[test]
+fn test_strip_lines_with_no_duplicates() {
+    let s = "[Adblock Plus 2.0]
+||apps.facebook.com^
+||apps.facebook.com^$popup
+||apps.facebook.com^$third-party";
+
+    let stripped = strip_lines(s, &(CountingOptions {
+        line_delimiter: '\n',
+        squash_chars: vec![],
+
+        // aren't used by this function
+        line_pattern: vec![],
+        ignore_delimiters: vec![],
+        trim_whitespace: false,
+        same_file: false,
+        remove_duplicates: false,
+    }));
+
+    assert_eq!(s, stripped);
 }
 
 pub fn merge_records(

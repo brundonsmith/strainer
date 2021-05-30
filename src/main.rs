@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{self, prelude::*};
 use std::{collections::HashMap, fs::File, path::{PathBuf, Path}, time::SystemTime, sync::{Mutex, Arc}};
 
@@ -13,7 +14,7 @@ mod common;
 mod printing;
 
 use gather_paths::list_files_in_dir;
-use counting::{count_lines, CountingOptions, merge_records, LineRecords};
+use counting::{CountingOptions, LineRecords, count_lines, merge_records, strip_lines};
 use common::parse_pattern;
 use printing::print_occurences;
 
@@ -56,6 +57,10 @@ fn main() {
             .short("sf")
             .long("same_file")
             .help("Only check for duplicate lines within the same file."))
+        .arg(clap::Arg::with_name("remove_duplicates")
+            .short("rm")
+            .long("remove_duplicates")
+            .help("Remove duplicate lines (keep the first occurrence). Requires --same_file. WARNING: Overwrites source files, use with caution!"))
         .arg(clap::Arg::with_name("squash_chars")
             .short("s")
             .long("squash_chars")
@@ -64,6 +69,10 @@ fn main() {
             .multiple(true))
         .get_matches();
 
+    if matches.is_present("remove_duplicates") && !matches.is_present("same_file") {
+        panic!("ERROR: Can't use --remove_duplicates without --same_file!");
+    }
+
     let directory = matches.value_of("DIRECTORY").unwrap();
     let path_pattern = matches.value_of("path_pattern").unwrap();
     let options = CountingOptions {
@@ -71,6 +80,7 @@ fn main() {
         line_pattern:      parse_pattern(matches.value_of("line_pattern").unwrap()),
         trim_whitespace:   matches.is_present("trim_whitespace"),
         same_file:         matches.is_present("same_file"),
+        remove_duplicates: matches.is_present("remove_duplicates"),
         squash_chars:      matches.values_of("squash_chars")
                             .map(|iter| 
                                 iter.map(|s| s.chars().next().unwrap()).collect())
@@ -106,19 +116,25 @@ fn main() {
             let local_separate_results_arc = separate_results_arc.clone();
 
             scope.spawn(move |_| {
-                // search each file in the thread chunk
-                for file_path in chunk {
-                    match search_file(&local_options_arc.clone(), &file_path) {
-                        Ok(mut file_results) => {
-                            if local_options_arc.same_file {
-                                local_separate_results_arc.lock().unwrap().push(file_results);
-                            } else {
-                                let mut merged_results_lock = local_merged_results_arc.lock().unwrap();
-                                merge_records(&mut merged_results_lock, &mut file_results);
-                                std::mem::drop(merged_results_lock);
-                            }
-                        },
-                        Err(_) => ()
+                if local_options_arc.remove_duplicates {
+                    for file_path in chunk {
+                        dedupe_file(&local_options_arc.clone(), &file_path).unwrap();
+                    }
+                } else {
+                    // search each file in the thread chunk
+                    for file_path in chunk {
+                        match search_file(&local_options_arc.clone(), &file_path) {
+                            Ok(mut file_results) => {
+                                if local_options_arc.same_file {
+                                    local_separate_results_arc.lock().unwrap().push(file_results);
+                                } else {
+                                    let mut merged_results_lock = local_merged_results_arc.lock().unwrap();
+                                    merge_records(&mut merged_results_lock, &mut file_results);
+                                    std::mem::drop(merged_results_lock);
+                                }
+                            },
+                            Err(_) => ()
+                        }
                     }
                 }
             });
@@ -128,32 +144,65 @@ fn main() {
 
 
     // filter out lines with no duplication
-    let mut output_buffer = String::new();
+    if !options.remove_duplicates {
+        let mut output_buffer = String::new();
 
-    let mut duplicate_count = 0;
-    if options.same_file {
-        let separate_results_lock = separate_results.lock().unwrap();
-        for file_results in separate_results_lock.iter() {
-            for dupe in file_results.iter().filter(|entry| entry.1.len() > 1) {
+        let mut duplicate_count = 0;
+        if options.same_file {
+            let separate_results_lock = separate_results.lock().unwrap();
+
+            for file_results in separate_results_lock.iter() {
+                for dupe in file_results.iter().filter(|entry| entry.1.len() > 1) {
+                    duplicate_count += 1;
+                    output_buffer.push_str("\n\n");
+                    print_occurences(dupe.0, dupe.1, |str| output_buffer.push_str(str));
+                }
+            }
+        } else {
+            let merged_results_lock = merged_results.lock().unwrap();
+            let duplicates = merged_results_lock.iter().filter(|entry| entry.1.len() > 1);
+            for dupe in duplicates {
                 duplicate_count += 1;
                 output_buffer.push_str("\n\n");
                 print_occurences(dupe.0, dupe.1, |str| output_buffer.push_str(str));
             }
         }
+
+        let files_with_duplicates = if options.same_file {
+            let separate_results_lock = separate_results.lock().unwrap();
+
+            let mut files_set = HashSet::new();
+            for file_results in separate_results_lock.iter() {
+                for dupe in file_results.iter().filter(|entry| entry.1.len() > 1) {
+                    for fl in dupe.1 {
+                        files_set.insert(&fl.path);
+                    }
+                }
+            }
+
+            files_set.len()
+        } else {
+            let merged_results_lock = merged_results.lock().unwrap();
+            let duplicates = merged_results_lock.iter().filter(|entry| entry.1.len() > 1);
+
+            let mut files_set = HashSet::new();
+            for dupe in duplicates {
+                for fl in dupe.1 {
+                    files_set.insert(&fl.path);
+                }
+            }
+
+            files_set.len()
+        };
+
+        println!("{}", &output_buffer);
+        println!();
+        println!("Searched {} files", files_count);
+        println!("Found {} duplicated lines in {} files", duplicate_count, files_with_duplicates);
     } else {
-        let merged_results_lock = merged_results.lock().unwrap();
-        let duplicates = merged_results_lock.iter().filter(|entry| entry.1.len() > 1);
-        for dupe in duplicates {
-            duplicate_count += 1;
-            output_buffer.push_str("\n\n");
-            print_occurences(dupe.0, dupe.1, |str| output_buffer.push_str(str));
-        }
+        println!("Searched {} files and removed any duplicate lines", files_count);
     }
     
-    println!("{}", &output_buffer);
-    println!();
-    println!("Searched {} files", files_count);
-    println!("Found {} duplicated lines", duplicate_count);
     println!(
         "Walking took {:?}ms",
         end_walk.duration_since(start_walk).unwrap().as_millis()
@@ -177,4 +226,21 @@ fn search_file(options: &CountingOptions, file_path: &PathBuf) -> Result<LineRec
         &contents,
         options,
     ));
+}
+
+fn dedupe_file(options: &CountingOptions, file_path: &PathBuf) -> Result<(), io::Error> {
+    let mut contents = String::new();
+
+    let mut file = File::open(file_path)?;
+    file.read_to_string(&mut contents)?;
+
+    let new_contents = strip_lines(
+        &contents,
+        options,
+    );
+
+    let mut file = File::create(file_path)?;
+    file.write(new_contents.as_bytes())?;
+
+    Ok(())
 }
