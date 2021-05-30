@@ -28,9 +28,12 @@ USAGE:
     strainer [FLAGS] [OPTIONS] <DIRECTORY>
 
 FLAGS:
-    -h, --help               Prints help information
-    -t, --trim_whitespace    Trim whitespace from the start and end of each line before comparing.
-    -V, --version            Prints version information
+    -h, --help                 Prints help information
+    -r, --remove_duplicates    Remove duplicate lines (keep the first occurrence). Requires --same_file. DANGER:
+                               Overwrites source files, use with caution!
+    -s, --same_file            Only check for duplicate lines within the same file.
+    -t, --trim_whitespace      Trim whitespace from the start and end of each line before comparing.
+    -V, --version              Prints version information
 
 OPTIONS:
     -d, --line_delimiter <CHAR>             The character that delimits 'lines'. Can be used, for example, to search a

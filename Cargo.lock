@@ -631,7 +631,7 @@ checksum = "7fdf1b9db47230893d76faad238fd6097fd6d6a9245cd7a4d90dbd639536bbd2"
 
 [[package]]
 name = "strainer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "crossbeam",

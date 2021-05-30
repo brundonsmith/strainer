@@ -1,54 +1,31 @@
 
 
 #[cfg(feature = "syntax-highlighting")]
-use syntect::{util::{as_24_bit_terminal_escaped}, highlighting::{ThemeSet, Style}, easy::HighlightLines, parsing::SyntaxSet};
-
-#[cfg(feature = "syntax-highlighting")]
-use std::ffi::OsStr;
+use syntect::{easy::HighlightLines, highlighting::Style, parsing::{SyntaxReference, SyntaxSet}, util::{as_24_bit_terminal_escaped}};
 
 use crate::counting::FileLocation;
 
-pub fn print_occurences(line: &str, occurences: &Vec<FileLocation>, mut write: impl FnMut(&str) -> ()) {
+#[cfg(feature = "syntax-highlighting")]
+pub fn print_occurences_highlighted(line: &str, occurences: &Vec<FileLocation>, mut write: impl FnMut(&str) -> (), ps: &SyntaxSet, mut h: HighlightLines) {
     
-    #[cfg(feature = "syntax-highlighting")]
-    {
-        let extension: Option<&str> = occurences.iter()
-            .map(|o| o.path.extension().and_then(OsStr::to_str))
-            .filter_map(|ext| ext)
-            .next();
+    // Syntax-color if possible
+    let ranges: Vec<(Style, &str)> = h.highlight(line, ps);
 
-        let output = match extension {
-            Some(ext) => {
-            
-                // Load these once at the start of your program
-                let ps = SyntaxSet::load_defaults_newlines();
-                let ts = ThemeSet::load_defaults();
-            
-                let syntax = ps.find_syntax_by_extension(ext);
+    write(&as_24_bit_terminal_escaped(&ranges[..], false));
 
-                match syntax {
-                    Some(s) => {
-                        let mut h = HighlightLines::new(s, &ts.themes["base16-ocean.dark"]);
-
-                        let ranges: Vec<(Style, &str)> = h.highlight(line, &ps);
-                        
-                        as_24_bit_terminal_escaped(&ranges[..], false)
-                    },
-                    None => String::from(line)
-                }
-            },
-            None => String::from(line)
-        };
-
-        write("{}");
-        write(&output);
+    for loc in occurences {
+        write(&format!("\n\t{}", &loc));
     }
+}
 
+#[cfg(feature = "syntax-highlighting")]
+pub struct Highlighter<'a> {
+    pub syntax: &'a SyntaxReference,
+    pub h: HighlightLines<'a>
+}
 
-    #[cfg(not(feature = "syntax-highlighting"))]
-    {
-        write(line);
-    }
+pub fn print_occurences(line: &str, occurences: &Vec<FileLocation>, mut write: impl FnMut(&str) -> ()) {
+    write(line);
 
     for loc in occurences {
         write(&format!("\n\t{}", &loc));

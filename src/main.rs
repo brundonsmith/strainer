@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+#[cfg(feature = "syntax-highlighting")]
+use std::{collections::HashMap, ffi::OsStr};
 use std::io::{self, prelude::*};
 use std::{fs::File, path::{PathBuf, Path}, time::SystemTime, sync::Arc};
 
@@ -21,7 +23,15 @@ use options::Mode;
 use pattern::parse_pattern;
 use printing::print_occurences;
 
+#[cfg(feature = "syntax-highlighting")]
+use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
+
 use crate::options::{Options, SearchResult};
+
+#[cfg(feature = "syntax-highlighting")]
+use crate::printing::Highlighter;
+#[cfg(feature = "syntax-highlighting")]
+use crate::printing::print_occurences_highlighted;
 
 const MAX_THREADS: usize = 10;
 
@@ -167,11 +177,51 @@ fn main() {
             let mut output_buffer = String::new();
             let mut duplicate_count = 0;
 
+            #[cfg(feature = "syntax-highlighting")]
+            let ps = SyntaxSet::load_defaults_newlines();
+            #[cfg(feature = "syntax-highlighting")]
+            let ts = ThemeSet::load_defaults();
+            #[cfg(feature = "syntax-highlighting")]
+            let mut highlighters_by_ext: HashMap<String, Highlighter> = HashMap::new();
+
             for file_results in results_lock.iter() {
-                for dupe in file_results.iter().filter(|entry| entry.1.len() > 1) {
+                for (line, occurences) in file_results.iter().filter(|entry| entry.1.len() > 1) {
                     duplicate_count += 1;
-                    output_buffer.push_str("\n\n");
-                    print_occurences(dupe.0, dupe.1, |str| output_buffer.push_str(str));
+                    output_buffer.push_str("\n\n"); // spacing
+
+                    #[cfg(feature = "syntax-highlighting")]
+                    {
+                        // Get the first file extension we can from the files where this line
+                        // was found (assumes the file extensions are the same)
+                        let extension: Option<&str> = occurences.iter()
+                            .map(|o| o.path.extension().and_then(OsStr::to_str))
+                            .filter_map(|ext| ext)
+                            .next();
+
+
+                        if let Some(ext) = extension {
+                            if let Some(highlighter) = highlighters_by_ext.get_mut(ext) {
+                                // found in hashmap
+                                print_occurences_highlighted(line, occurences, |str| output_buffer.push_str(str), &ps, HighlightLines::new(highlighter.syntax, &ts.themes["base16-ocean.dark"]))
+                            } else if let Some(syntax) = ps.find_syntax_by_extension(ext) {
+                                // valid in library
+                                let h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
+                                let highlighter = Highlighter { syntax, h };
+
+                                print_occurences_highlighted(line, occurences, |str| output_buffer.push_str(str), &ps, HighlightLines::new(highlighter.syntax, &ts.themes["base16-ocean.dark"]));
+
+                                highlighters_by_ext.insert(String::from(ext), highlighter);
+                            } else {
+                                // can't highlight
+                                print_occurences(line, occurences, |str| output_buffer.push_str(str));
+                            }
+                        }
+                    }
+
+                    #[cfg(not(feature = "syntax-highlighting"))]
+                    {
+                        print_occurences(line, occurences, |str| output_buffer.push_str(str));
+                    }
                 }
             }
 
@@ -199,11 +249,51 @@ fn main() {
             let mut output_buffer = String::new();
             let mut duplicate_count = 0;
 
+            #[cfg(feature = "syntax-highlighting")]
+            let ps = SyntaxSet::load_defaults_newlines();
+            #[cfg(feature = "syntax-highlighting")]
+            let ts = ThemeSet::load_defaults();
+            #[cfg(feature = "syntax-highlighting")]
+            let mut highlighters_by_ext: HashMap<String, Highlighter> = HashMap::new();
+
             let duplicates = results_lock.iter().filter(|entry| entry.1.len() > 1);
-            for dupe in duplicates {
+            for (line, occurences) in duplicates {
                 duplicate_count += 1;
-                output_buffer.push_str("\n\n");
-                print_occurences(dupe.0, dupe.1, |str| output_buffer.push_str(str));
+                output_buffer.push_str("\n\n"); // spacing
+
+                #[cfg(feature = "syntax-highlighting")]
+                {
+                    // Get the first file extension we can from the files where this line
+                    // was found (assumes the file extensions are the same)
+                    let extension: Option<&str> = occurences.iter()
+                        .map(|o| o.path.extension().and_then(OsStr::to_str))
+                        .filter_map(|ext| ext)
+                        .next();
+
+
+                    if let Some(ext) = extension {
+                        if let Some(highlighter) = highlighters_by_ext.get_mut(ext) {
+                            // found in hashmap
+                            print_occurences_highlighted(line, occurences, |str| output_buffer.push_str(str), &ps, HighlightLines::new(highlighter.syntax, &ts.themes["base16-ocean.dark"]))
+                        } else if let Some(syntax) = ps.find_syntax_by_extension(ext) {
+                            // valid in library
+                            let h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
+                            let highlighter = Highlighter { syntax, h };
+
+                            print_occurences_highlighted(line, occurences, |str| output_buffer.push_str(str), &ps, HighlightLines::new(highlighter.syntax, &ts.themes["base16-ocean.dark"]));
+
+                            highlighters_by_ext.insert(String::from(ext), highlighter);
+                        } else {
+                            // can't highlight
+                            print_occurences(line, occurences, |str| output_buffer.push_str(str));
+                        }
+                    }
+                }
+
+                #[cfg(not(feature = "syntax-highlighting"))]
+                {
+                    print_occurences(line, occurences, |str| output_buffer.push_str(str));
+                }
             }
 
             let files_with_duplicates = {
