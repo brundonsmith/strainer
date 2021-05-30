@@ -1,6 +1,6 @@
 [package]
 name = "strainer"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Brandon Smith"]
 description = "Command-line tool for finding duplicate lines in text files"
 license = "ISC"
