@@ -2,7 +2,6 @@ use std::{collections::HashMap, sync::Mutex};
 
 use crate::{counting::FileLocation, pattern::Pattern};
 
-
 #[derive(Debug)]
 pub struct Options<'a> {
     pub line_delimiter: char,
@@ -21,7 +20,7 @@ pub enum Mode {
 }
 
 pub enum SearchResult {
-    AllFiles(Mutex<HashMap<String,  Vec<FileLocation>>>),
+    AllFiles(Mutex<HashMap<String, Vec<FileLocation>>>),
     SameFile(Mutex<Vec<HashMap<String, Vec<FileLocation>>>>),
     RemoveDuplicates,
 }
