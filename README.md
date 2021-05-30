@@ -14,9 +14,9 @@ cargo install strainer
 
 It has one compile-time feature flag: `syntax-highlighting`. With this enabled 
 the `syntect` library will be used to automatically syntax-highlight code lines 
-in the output. This roughly doubles the binary size (it's still small) and slows
-down the output a bit (not the search itself), and the coloration is also broken
-on the default macOS terminal app (iTerm2 works fine).
+in the output. This roughly doubles the binary size (it's still small), and the 
+coloration doesn't work correctly on the default macOS terminal app (but iTerm2 
+works fine).
 ```
 cargo install strainer --features "syntax-highlighting"
 ```
