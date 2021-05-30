@@ -4,8 +4,10 @@ use std::{
     path::{Path, PathBuf}, collections::VecDeque,
 };
 
-use crate::common::{matches,Pattern};
+use crate::pattern::{matches,Pattern};
 
+/// Given a root directory and a pattern to match paths against, recursively
+/// list all files that are to be searched
 pub fn list_files_in_dir(root_dir: &Path, pattern: &Pattern) -> Result<Vec<PathBuf>, io::Error> {
     let mut dir_queue: VecDeque<PathBuf> = VecDeque::new();
     dir_queue.push_back(PathBuf::from(root_dir));

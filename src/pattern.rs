@@ -1,4 +1,5 @@
 
+/// A pattern against which strings can be matched
 pub type Pattern<'a> = Vec<&'a str>;
 
 pub fn parse_pattern(pattern_str: &str) -> Pattern {

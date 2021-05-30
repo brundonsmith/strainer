@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::io::{self, prelude::*};
-use std::{collections::HashMap, fs::File, path::{PathBuf, Path}, time::SystemTime, sync::{Mutex, Arc}};
+use std::{fs::File, path::{PathBuf, Path}, time::SystemTime, sync::Arc};
 
 extern crate clap;
 extern crate crossbeam;
@@ -8,17 +8,38 @@ extern crate crossbeam;
 #[cfg(feature = "syntax-highlighting")]
 extern crate syntect;
 
+mod options;
 mod gather_paths;
 mod counting;
-mod common;
+mod pattern;
 mod printing;
 
+use clap::ArgMatches;
 use gather_paths::list_files_in_dir;
-use counting::{CountingOptions, LineRecords, count_lines, merge_records, strip_lines};
-use common::parse_pattern;
+use counting::{LineOccurrences, count_lines, merge_records, strip_lines};
+use options::Mode;
+use pattern::parse_pattern;
 use printing::print_occurences;
 
-const MAX_THREADS: usize = 100;
+use crate::options::{Options, SearchResult};
+
+const MAX_THREADS: usize = 10;
+
+fn mode_from_matches(matches: &ArgMatches) -> Result<Mode, &'static str> {
+    if matches.is_present("remove_duplicates") {
+        if !matches.is_present("same_file") {
+            Err("ERROR: Can't use --remove_duplicates without --same_file")
+        } else {
+            Ok(Mode::RemoveDuplicates)
+        }
+    } else {
+        if !matches.is_present("same_file") {
+            Ok(Mode::AllFiles)
+        } else {
+            Ok(Mode::SameFile)
+        }
+    }
+}
 
 fn main() {
     let matches = clap::App::new("Strainer")
@@ -60,7 +81,7 @@ fn main() {
         .arg(clap::Arg::with_name("remove_duplicates")
             .short("rm")
             .long("remove_duplicates")
-            .help("Remove duplicate lines (keep the first occurrence). Requires --same_file. WARNING: Overwrites source files, use with caution!"))
+            .help("Remove duplicate lines (keep the first occurrence). Requires --same_file. DANGER: Overwrites source files, use with caution!"))
         .arg(clap::Arg::with_name("squash_chars")
             .short("s")
             .long("squash_chars")
@@ -69,18 +90,18 @@ fn main() {
             .multiple(true))
         .get_matches();
 
-    if matches.is_present("remove_duplicates") && !matches.is_present("same_file") {
-        panic!("ERROR: Can't use --remove_duplicates without --same_file!");
-    }
-
     let directory = matches.value_of("DIRECTORY").unwrap();
     let path_pattern = matches.value_of("path_pattern").unwrap();
-    let options = CountingOptions {
+    let mode = match mode_from_matches(&matches) {
+        Ok(mode) => mode,
+        Err(e) => panic!("{}", e),
+    };
+
+    let options = Options {
         line_delimiter:    matches.value_of("line_delimiter").map(|s| s.chars().next().unwrap()).unwrap_or('\n'),
         line_pattern:      parse_pattern(matches.value_of("line_pattern").unwrap()),
         trim_whitespace:   matches.is_present("trim_whitespace"),
-        same_file:         matches.is_present("same_file"),
-        remove_duplicates: matches.is_present("remove_duplicates"),
+        mode,
         squash_chars:      matches.values_of("squash_chars")
                             .map(|iter| 
                                 iter.map(|s| s.chars().next().unwrap()).collect())
@@ -91,50 +112,42 @@ fn main() {
 
     // walk directory recursively and find all target files
     println!("Searching...");
-    let start_walk = SystemTime::now();
+    let start_listing = SystemTime::now();
     let files = list_files_in_dir(
         Path::new(&directory), 
         &parse_pattern(path_pattern)
     ).unwrap();
 
-    let files_arc = Arc::new(&files);
-    let options_arc = Arc::new(&options);
+    let files_ref = &files;
+    let options_ref = &options;
     let end_walk = SystemTime::now();
 
-    let merged_results = Mutex::new(HashMap::new());
-    let merged_results_arc = Arc::new(&merged_results);
+    let results = SearchResult::from_mode(options_ref.mode);
+    let results_arc = Arc::new(&results);
 
-    let separate_results = Mutex::new(Vec::new());
-    let separate_results_arc = Arc::new(&separate_results);
-
-    let start_search = SystemTime::now();
+    let start_processing = SystemTime::now();
     let files_count = files.len();
+    let files_per_thread = std::cmp::max(files_count / MAX_THREADS, 1);
     crossbeam::scope(move |scope| {
-        for chunk in files_arc.clone().chunks(std::cmp::max(files_count / MAX_THREADS, 1)) {
-            let local_options_arc = options_arc.clone();
-            let local_merged_results_arc = merged_results_arc.clone();
-            let local_separate_results_arc = separate_results_arc.clone();
+        for chunk in files_ref.chunks(files_per_thread) {
+            let local_results_arc = results_arc.clone();
 
             scope.spawn(move |_| {
-                if local_options_arc.remove_duplicates {
-                    for file_path in chunk {
-                        dedupe_file(&local_options_arc.clone(), &file_path).unwrap();
-                    }
-                } else {
-                    // search each file in the thread chunk
-                    for file_path in chunk {
-                        match search_file(&local_options_arc.clone(), &file_path) {
-                            Ok(mut file_results) => {
-                                if local_options_arc.same_file {
-                                    local_separate_results_arc.lock().unwrap().push(file_results);
-                                } else {
-                                    let mut merged_results_lock = local_merged_results_arc.lock().unwrap();
-                                    merge_records(&mut merged_results_lock, &mut file_results);
-                                    std::mem::drop(merged_results_lock);
-                                }
-                            },
-                            Err(_) => ()
-                        }
+                for file_path in chunk {
+                    match local_results_arc.as_ref() {
+                        SearchResult::RemoveDuplicates => {
+                            dedupe_file(options_ref, &file_path).unwrap();
+                        },
+                        SearchResult::SameFile(results) => {
+                            if let Ok(file_results) = search_file(options_ref, &file_path) {
+                                results.lock().unwrap().push(file_results);
+                            }
+                        },
+                        SearchResult::AllFiles(results) => {
+                            if let Ok(file_results) = search_file(options_ref, &file_path) {
+                                merge_records(&mut results.lock().unwrap(), file_results);
+                            }
+                        },
                     }
                 }
             });
@@ -144,78 +157,88 @@ fn main() {
 
 
     // filter out lines with no duplication
-    if !options.remove_duplicates {
-        let mut output_buffer = String::new();
+    match results {
+        SearchResult::RemoveDuplicates => {
+            println!("Searched {} files and removed any duplicate lines", files_count);
+        },
+        SearchResult::SameFile(results) => {
+            let results_lock = results.lock().unwrap();
 
-        let mut duplicate_count = 0;
-        if options.same_file {
-            let separate_results_lock = separate_results.lock().unwrap();
+            let mut output_buffer = String::new();
+            let mut duplicate_count = 0;
 
-            for file_results in separate_results_lock.iter() {
+            for file_results in results_lock.iter() {
                 for dupe in file_results.iter().filter(|entry| entry.1.len() > 1) {
                     duplicate_count += 1;
                     output_buffer.push_str("\n\n");
                     print_occurences(dupe.0, dupe.1, |str| output_buffer.push_str(str));
                 }
             }
-        } else {
-            let merged_results_lock = merged_results.lock().unwrap();
-            let duplicates = merged_results_lock.iter().filter(|entry| entry.1.len() > 1);
+
+            let files_with_duplicates = {
+                let mut files_set = HashSet::new();
+                for file_results in results_lock.iter() {
+                    for dupe in file_results.iter().filter(|entry| entry.1.len() > 1) {
+                        for fl in dupe.1 {
+                            files_set.insert(&fl.path);
+                        }
+                    }
+                }
+
+                files_set.len()
+            };
+
+            println!("{}", &output_buffer);
+            println!();
+            println!("Searched {} files", files_count);
+            println!("Found {} duplicated lines in {} files", duplicate_count, files_with_duplicates);
+        },
+        SearchResult::AllFiles(results) => {
+            let results_lock = results.lock().unwrap();
+
+            let mut output_buffer = String::new();
+            let mut duplicate_count = 0;
+
+            let duplicates = results_lock.iter().filter(|entry| entry.1.len() > 1);
             for dupe in duplicates {
                 duplicate_count += 1;
                 output_buffer.push_str("\n\n");
                 print_occurences(dupe.0, dupe.1, |str| output_buffer.push_str(str));
             }
-        }
 
-        let files_with_duplicates = if options.same_file {
-            let separate_results_lock = separate_results.lock().unwrap();
+            let files_with_duplicates = {
+                let duplicates = results_lock.iter().filter(|entry| entry.1.len() > 1);
 
-            let mut files_set = HashSet::new();
-            for file_results in separate_results_lock.iter() {
-                for dupe in file_results.iter().filter(|entry| entry.1.len() > 1) {
+                let mut files_set = HashSet::new();
+                for dupe in duplicates {
                     for fl in dupe.1 {
                         files_set.insert(&fl.path);
                     }
                 }
-            }
 
-            files_set.len()
-        } else {
-            let merged_results_lock = merged_results.lock().unwrap();
-            let duplicates = merged_results_lock.iter().filter(|entry| entry.1.len() > 1);
+                files_set.len()
+            };
 
-            let mut files_set = HashSet::new();
-            for dupe in duplicates {
-                for fl in dupe.1 {
-                    files_set.insert(&fl.path);
-                }
-            }
+            println!("{}", &output_buffer);
+            println!();
+            println!("Searched {} files", files_count);
+            println!("Found {} duplicated lines in {} files", duplicate_count, files_with_duplicates);
+        },
+    };
 
-            files_set.len()
-        };
-
-        println!("{}", &output_buffer);
-        println!();
-        println!("Searched {} files", files_count);
-        println!("Found {} duplicated lines in {} files", duplicate_count, files_with_duplicates);
-    } else {
-        println!("Searched {} files and removed any duplicate lines", files_count);
-    }
-    
     println!(
-        "Walking took {:?}ms",
-        end_walk.duration_since(start_walk).unwrap().as_millis()
+        "Determining file list took {:?}ms",
+        end_walk.duration_since(start_listing).unwrap().as_millis()
     );
 
     println!(
-        "Searching took {:?}ms",
-        end_search.duration_since(start_search).unwrap().as_millis()
+        "Processing files took {:?}ms",
+        end_search.duration_since(start_processing).unwrap().as_millis()
     );
 }
 
 
-fn search_file(options: &CountingOptions, file_path: &PathBuf) -> Result<LineRecords, io::Error> {
+fn search_file(options: &Options, file_path: &PathBuf) -> Result<LineOccurrences, io::Error> {
     let mut contents = String::new();
 
     let mut file = File::open(file_path)?;
@@ -228,7 +251,7 @@ fn search_file(options: &CountingOptions, file_path: &PathBuf) -> Result<LineRec
     ));
 }
 
-fn dedupe_file(options: &CountingOptions, file_path: &PathBuf) -> Result<(), io::Error> {
+fn dedupe_file(options: &Options, file_path: &PathBuf) -> Result<(), io::Error> {
     let mut contents = String::new();
 
     let mut file = File::open(file_path)?;
