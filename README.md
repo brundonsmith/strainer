@@ -7,7 +7,7 @@ lines and where they reside in each file.
 
 ## Installation
 
-Strainer is available on cargo.io:
+Strainer is available on crates.io:
 ```
 cargo install strainer
 ```
