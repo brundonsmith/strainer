@@ -17,7 +17,11 @@ syntax-highlighting = ["syntect"]
 [profile.dev]
 opt-level = 3
 
+[profile.test]
+opt-level = 3
+
 [dependencies]
 clap = "2.33.0"
 crossbeam = "0.7.3"
 syntect = { version = "4.1.0", optional = true }
+rustc-hash = { version = "1.0", default-features = false }

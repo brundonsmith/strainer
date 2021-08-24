@@ -1,4 +1,7 @@
+#![allow(dead_code)]
+
 use std::collections::HashSet;
+
 #[cfg(feature = "syntax-highlighting")]
 use std::{collections::HashMap, ffi::OsStr};
 use std::io::{self, prelude::*};
@@ -15,21 +18,26 @@ mod gather_paths;
 mod counting;
 mod pattern;
 mod printing;
+mod blocks;
 
+use blocks::count_chunks;
 use clap::ArgMatches;
 use gather_paths::list_files_in_dir;
-use counting::{FileLocation, LineOccurrences, count_lines, merge_records, strip_lines};
+use counting::{Occurrences, count_lines, merge_records, strip_lines};
 use options::Mode;
 use pattern::parse_pattern;
-use printing::print_occurences;
+
+use crate::counting::FileLocation;
+use crate::options::{Options, SearchResult};
 
 #[cfg(feature = "syntax-highlighting")]
 use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
-use crate::options::{Options, SearchResult};
-
 #[cfg(feature = "syntax-highlighting")]
 use crate::printing::Highlighter;
+
+#[cfg(not(feature = "syntax-highlighting"))]
+use crate::printing::print_all_unhighlighted;
 #[cfg(feature = "syntax-highlighting")]
 use crate::printing::print_occurences_highlighted;
 
@@ -88,6 +96,10 @@ fn main() {
             .short("sf")
             .long("same_file")
             .help("Only check for duplicate lines within the same file."))
+        .arg(clap::Arg::with_name("blocks")
+            .short("b")
+            .long("blocks")
+            .help("Check for entire blocks of duplicate lines."))
         .arg(clap::Arg::with_name("remove_duplicates")
             .short("rm")
             .long("remove_duplicates")
@@ -108,15 +120,16 @@ fn main() {
     };
 
     let options = Options {
-        line_delimiter:    matches.value_of("line_delimiter").map(|s| s.chars().next().unwrap()).unwrap_or('\n'),
-        line_pattern:      parse_pattern(matches.value_of("line_pattern").unwrap()),
-        trim_whitespace:   matches.is_present("trim_whitespace"),
+        line_delimiter:     matches.value_of("line_delimiter").map(|s| s.chars().next().unwrap()).unwrap_or('\n'),
+        line_pattern:       parse_pattern(matches.value_of("line_pattern").unwrap()),
+        trim_whitespace:    matches.is_present("trim_whitespace"),
         mode,
-        squash_chars:      matches.values_of("squash_chars")
+        squash_chars:       matches.values_of("squash_chars")
                             .map(|iter| 
                                 iter.map(|s| s.chars().next().unwrap()).collect())
                             .unwrap_or(vec![]),
-        ignore_delimiters: vec![], // TOTO: Implement
+        blocks:             matches.is_present("blocks"),
+        ignore_delimiters:  vec![], // TOTO: Implement
     };
 
 
@@ -179,16 +192,19 @@ fn main() {
         SearchResult::SameFile(results) => {
             let results_lock = results.lock().unwrap();
 
-            let duplicates = results_lock.iter()
+            let mut duplicates = results_lock.iter()
                 .map(|one_file| 
                     one_file.iter().filter(|entry| entry.1.len() > 1))
-                .flatten();
+                .flatten()
+                .collect::<Vec<(&String, &Vec<FileLocation>)>>();
+
+            duplicates.sort();
             
             #[cfg(feature = "syntax-highlighting")]
-            let (output_buffer, duplicate_count) = print_all_highlighted(duplicates);
+            let (output_buffer, duplicate_count) = print_all_highlighted(duplicates.into_iter());
 
             #[cfg(not(feature = "syntax-highlighting"))]
-            let (output_buffer, duplicate_count) = print_all_unhighlighted(duplicates);
+            let (output_buffer, duplicate_count) = print_all_unhighlighted(duplicates.into_iter());
 
             let files_with_duplicates = {
                 let mut files_set = HashSet::new();
@@ -206,17 +222,21 @@ fn main() {
             println!("{}", &output_buffer);
             println!();
             println!("Searched {} files", files_count);
-            println!("Found {} duplicated lines in {} files", duplicate_count, files_with_duplicates);
+            println!("Found {} duplicated lines across {} of them", duplicate_count, files_with_duplicates);
         },
         SearchResult::AllFiles(results) => {
             let results_lock = results.lock().unwrap();
-            let duplicates = results_lock.iter().filter(|entry| entry.1.len() > 1);
+            let mut duplicates = results_lock.iter()
+                .filter(|entry| entry.1.len() > 1)
+                .collect::<Vec<(&String, &Vec<FileLocation>)>>();
             
+            duplicates.sort();
+
             #[cfg(feature = "syntax-highlighting")]
-            let (output_buffer, duplicate_count) = print_all_highlighted(duplicates);
+            let (output_buffer, duplicate_count) = print_all_highlighted(duplicates.into_iter());
 
             #[cfg(not(feature = "syntax-highlighting"))]
-            let (output_buffer, duplicate_count) = print_all_unhighlighted(duplicates);
+            let (output_buffer, duplicate_count) = print_all_unhighlighted(duplicates.into_iter());
 
             let files_with_duplicates = {
                 let duplicates = results_lock.iter().filter(|entry| entry.1.len() > 1);
@@ -234,7 +254,7 @@ fn main() {
             println!("{}", &output_buffer);
             println!();
             println!("Searched {} files", files_count);
-            println!("Found {} duplicated lines in {} files", duplicate_count, files_with_duplicates);
+            println!("Found {} duplicated lines across {} of them", duplicate_count, files_with_duplicates);
         },
     };
 
@@ -250,17 +270,28 @@ fn main() {
 }
 
 
-fn search_file(options: &Options, file_path: &PathBuf) -> Result<LineOccurrences, io::Error> {
+fn search_file(options: &Options, file_path: &PathBuf) -> Result<Occurrences, io::Error> {
     let mut contents = String::new();
 
     let mut file = File::open(file_path)?;
     file.read_to_string(&mut contents)?;
 
-    return Ok(count_lines(
-        file_path,
-        &contents,
-        options,
-    ));
+    
+    let occurrences = if options.blocks {
+        count_chunks(
+            file_path,
+            &contents,
+            options,
+        )
+    } else {
+        count_lines(
+            file_path,
+            &contents,
+            options,
+        )
+    };
+
+    return Ok(occurrences);
 }
 
 fn dedupe_file(options: &Options, file_path: &PathBuf) -> Result<(), io::Error> {
@@ -278,65 +309,4 @@ fn dedupe_file(options: &Options, file_path: &PathBuf) -> Result<(), io::Error> 
     file.write(new_contents.as_bytes())?;
 
     Ok(())
-}
-
-#[cfg(not(feature = "syntax-highlighting"))]
-fn print_all_unhighlighted<'a>(duplicates: impl Iterator<Item=(&'a String, &'a Vec<FileLocation>)>) -> (String, usize) {
-    let mut output_buffer = String::new();
-    let mut duplicate_count = 0;
-
-    for (line, occurences) in duplicates {
-        duplicate_count += 1;
-        output_buffer.push_str("\n\n"); // spacing
-
-        print_occurences(line, occurences, |str| output_buffer.push_str(str));
-    }
-
-    (output_buffer, duplicate_count)
-}
-
-#[cfg(feature = "syntax-highlighting")]
-fn print_all_highlighted<'a>(duplicates: impl Iterator<Item=(&'a String, &'a Vec<FileLocation>)>) -> (String, usize) {
-    let mut output_buffer = String::new();
-    let mut duplicate_count = 0;
-
-    let ps = SyntaxSet::load_defaults_newlines();
-    let ts = ThemeSet::load_defaults();
-    let mut highlighters_by_ext: HashMap<String, Highlighter> = HashMap::new();
-
-    for (line, occurences) in duplicates {
-        duplicate_count += 1;
-        output_buffer.push_str("\n\n"); // spacing
-
-        // Get the first file extension we can from the files where this line
-        // was found (assumes the file extensions are the same)
-        let extension: Option<&str> = occurences.iter()
-            .map(|o| o.path.extension().and_then(OsStr::to_str))
-            .filter_map(|ext| ext)
-            .next();
-
-
-        if let Some(ext) = extension {
-            if let Some(highlighter) = highlighters_by_ext.get_mut(ext) {
-                // found in hashmap
-                print_occurences_highlighted(line, occurences, |str| output_buffer.push_str(str), &ps, HighlightLines::new(highlighter.syntax, &ts.themes["base16-ocean.dark"]))
-            } else if let Some(syntax) = ps.find_syntax_by_extension(ext) {
-                // valid in library
-                let h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
-                let highlighter = Highlighter { syntax, h };
-
-                print_occurences_highlighted(line, occurences, |str| output_buffer.push_str(str), &ps, HighlightLines::new(highlighter.syntax, &ts.themes["base16-ocean.dark"]));
-
-                highlighters_by_ext.insert(String::from(ext), highlighter);
-            } else {
-                // can't highlight
-                print_occurences(line, occurences, |str| output_buffer.push_str(str));
-            }
-        } else {
-            // no extension
-            print_occurences(line, occurences, |str| output_buffer.push_str(str));
-        }
-    }
-
-    (output_buffer, duplicate_count)
 }

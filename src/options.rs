@@ -9,6 +9,7 @@ pub struct Options<'a> {
     pub squash_chars: Vec<char>,
     pub ignore_delimiters: Vec<char>,
     pub trim_whitespace: bool,
+    pub blocks: bool,
     pub mode: Mode,
 }
 
